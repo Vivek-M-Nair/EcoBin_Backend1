@@ -1,0 +1,54 @@
+# Walkthrough - Registration, Login, Zones, and Admin Implementation
+
+This walkthrough summarizes the implementation and verification of user registration, worker/staff registration, dual-role login authentication, dynamic zone mapping, and automatic database seeding.
+
+## Changes Made
+
+### 1. Created Database Models & Repositories
+* Created [RegisteredUser.java](file:///c:/Users/vivek/Sem%202/Mini-Project/backend/backend/src/main/java/com/EcoBin/backend/Model/RegisteredUser.java) & [RegisteredUserRepository.java](file:///c:/Users/vivek/Sem%202/Mini-Project/backend/backend/src/main/java/com/EcoBin/backend/repository/RegisteredUserRepository.java) to handle the `Registered_user` collection.
+* Created [CollectionWorker.java](file:///c:/Users/vivek/Sem%202/Mini-Project/backend/backend/src/main/java/com/EcoBin/backend/Model/CollectionWorker.java) & [CollectionWorkerRepository.java](file:///c:/Users/vivek/Sem%202/Mini-Project/backend/backend/src/main/java/com/EcoBin/backend/repository/CollectionWorkerRepository.java) to manage `Collection_workers` (which includes office staff using roles).
+* Created [Admin.java](file:///c:/Users/vivek/Sem%202/Mini-Project/backend/backend/src/main/java/com/EcoBin/backend/Model/Admin.java) & [AdminRepository.java](file:///c:/Users/vivek/Sem%202/Mini-Project/backend/backend/src/main/java/com/EcoBin/backend/repository/AdminRepository.java) to manage the `admin` collection.
+* Created [ZonesKottayam.java](file:///c:/Users/vivek/Sem%202/Mini-Project/backend/backend/src/main/java/com/EcoBin/backend/Model/ZonesKottayam.java) & [ZonesKottayamRepository.java](file:///c:/Users/vivek/Sem%202/Mini-Project/backend/backend/src/main/java/com/EcoBin/backend/repository/ZonesKottayamRepository.java) for `Zones_Kottayam` collection.
+* Created [ZonesErnakulam.java](file:///c:/Users/vivek/Sem%202/Mini-Project/backend/backend/src/main/java/com/EcoBin/backend/Model/ZonesErnakulam.java) & [ZonesErnakulamRepository.java](file:///c:/Users/vivek/Sem%202/Mini-Project/backend/backend/src/main/java/com/EcoBin/backend/repository/ZonesErnakulamRepository.java) for `Zone_Ernakulam` collection.
+* Created [CollectionSchedule.java](file:///c:/Users/vivek/Sem%202/Mini-Project/backend/backend/src/main/java/com/EcoBin/backend/Model/CollectionSchedule.java) & [CollectionScheduleRepository.java](file:///c:/Users/vivek/Sem%202/Mini-Project/backend/backend/src/main/java/com/EcoBin/backend/repository/CollectionScheduleRepository.java) for `Collection_Schedule` collection.
+
+---
+
+### 2. Implemented Controller Logic
+
+#### Registration ([RegistrationController.java](file:///c:/Users/vivek/Sem%202/Mini-Project/backend/backend/src/main/java/com/EcoBin/backend/controller/RegistrationController.java)):
+* **`/api/register/user/verify`**: Verifies if the user's house coordinates exist in the government `House_details` table. If found, checks for existing accounts, performs a zone mapping search (Kottayam vs Ernakulam by matching local body and ward number), stores the partial registered user with a unique `houseId` and mapped `zoneId`, and returns the `houseId`.
+* **`/api/register/user/complete`**: Completes registration by updating password, email, and phone number for the `houseId`.
+* **`/api/register/worker`**: Checks duplicates, registers a collection worker under `Collection_workers` with a generated alphanumeric worker ID and password, and returns credentials.
+* **`/api/register/staff`**: Registers office staff in the same collection under the role `"OFFICE_STAFF"` with a generated ID (`CS-xxxx`) and password.
+
+#### Dual-Role Login ([LoginController.java](file:///c:/Users/vivek/Sem%202/Mini-Project/backend/backend/src/main/java/com/EcoBin/backend/controller/LoginController.java)):
+* **`/api/login`**: Accepts a `userId` and `password`. Looks in `Registered_user` first. If matching, returns user details along with schedule statistics from `Collection_Schedule`. Otherwise, looks in `Collection_workers` and returns worker stats (scheduled zone, number of houses, village name, etc.).
+
+---
+
+### 3. Integrated Startup Database Seeding
+* Modified [BackendApplication.java](file:///c:/Users/vivek/Sem%202/Mini-Project/backend/backend/src/main/java/com/EcoBin/backend/BackendApplication.java) to automatically seed default Kottayam & Ernakulam zones, government house details for registration testing, an admin account (`admin1` / `adminpass`), and dummy waste collection schedules on startup.
+
+---
+
+## Verification Results
+
+### Build Compilation
+Compilation completes successfully using Maven:
+```text
+[INFO] --- compiler:3.14.1:compile (default-compile) @ backend ---
+[INFO] Recompiling the module because of changed source code.
+[INFO] Compiling 20 source files with javac [debug parameters release 21] to target\classes
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+```
+
+### Seeding Execution
+When running the Spring Boot application, database seeder executes without errors:
+```text
+Seeded admin account: admin1 / adminpass
+Seeded Kottayam Zones.
+Seeded Ernakulam Zones.
+Seeded default waste collection schedules.
+```

@@ -13,6 +13,21 @@ public class RegisteredUser {
     @Field("house_number")
     private String houseNumber;
 
+    @Field("house_name")
+    private String houseName;
+
+    @Field("sub_no")
+    private String subNo;
+
+    @Field("dist_id")
+    private String distId;
+
+    @Field("panchayath_or_municipality_name")
+    private String panchayathOrMunicipalityName;
+
+    @Field("ward_no")
+    private int wardNo;
+
     @Field("user_name")
     private String userName;
 
@@ -32,12 +47,21 @@ public class RegisteredUser {
 
     private int points = 0;
 
+    // Default Constructor
     public RegisteredUser() {
     }
 
-    public RegisteredUser(String houseId, String houseNumber, String userName, String zoneId) {
+    // Parameterized Constructor including new house details
+    public RegisteredUser(String houseId, String houseNumber, String houseName, String subNo,
+            String distId, String panchayathOrMunicipalityName, int wardNo,
+            String userName, String zoneId) {
         this.houseId = houseId;
         this.houseNumber = houseNumber;
+        this.houseName = houseName;
+        this.subNo = subNo;
+        this.distId = distId;
+        this.panchayathOrMunicipalityName = panchayathOrMunicipalityName;
+        this.wardNo = wardNo;
         this.userName = userName;
         this.zoneId = zoneId;
         this.pendingPayment = 0.0;
@@ -59,6 +83,46 @@ public class RegisteredUser {
 
     public void setHouseNumber(String houseNumber) {
         this.houseNumber = houseNumber;
+    }
+
+    public String getHouseName() {
+        return houseName;
+    }
+
+    public void setHouseName(String houseName) {
+        this.houseName = houseName;
+    }
+
+    public String getSubNo() {
+        return subNo;
+    }
+
+    public void setSubNo(String subNo) {
+        this.subNo = subNo;
+    }
+
+    public String getDistId() {
+        return distId;
+    }
+
+    public void setDistId(String distId) {
+        this.distId = distId;
+    }
+
+    public String getPanchayathOrMunicipalityName() {
+        return panchayathOrMunicipalityName;
+    }
+
+    public void setPanchayathOrMunicipalityName(String panchayathOrMunicipalityName) {
+        this.panchayathOrMunicipalityName = panchayathOrMunicipalityName;
+    }
+
+    public int getWardNo() {
+        return wardNo;
+    }
+
+    public void setWardNo(int wardNo) {
+        this.wardNo = wardNo;
     }
 
     public String getUserName() {

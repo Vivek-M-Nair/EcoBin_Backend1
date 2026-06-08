@@ -4,14 +4,11 @@ import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
 import org.springframework.data.mongodb.core.mapping.Field;
 
-// This is to create a table to store all the house detail
-// replication of Govt DB to verify if the house is registered to govt
-
 @Document(collection = "House_details")
 public class HouseDetails {
 
     @Id
-    private String houseNumber;
+    private String houseNumber; // Maps directly to MongoDB's "_id" ("H-101")
 
     @Field("house_name")
     private String houseName;
@@ -31,11 +28,12 @@ public class HouseDetails {
     @Field("Ward_no")
     private int wardNo;
 
-    // Constructors
-    public HouseDetails() {}
+    // Default Constructor
+    public HouseDetails() {
+    }
 
     public HouseDetails(String houseNumber, String houseName, String ownerName, String subNo,
-                        String distId, String localBodyName, int wardNo) {
+            String distId, String localBodyName, int wardNo) {
         this.houseNumber = houseNumber;
         this.houseName = houseName;
         this.ownerName = ownerName;
@@ -46,24 +44,59 @@ public class HouseDetails {
     }
 
     // Getters and Setters
-    public String getHouseNumber() { return houseNumber; }
-    public void setHouseNumber(String houseNumber) { this.houseNumber = houseNumber; }
+    public String getHouseNumber() {
+        return houseNumber;
+    }
 
-    public String getHouseName() { return houseName; }
-    public void setHouseName(String houseName) { this.houseName = houseName; }
+    public void setHouseNumber(String houseNumber) {
+        this.houseNumber = houseNumber;
+    }
 
-    public String getOwnerName() { return ownerName; }
-    public void setOwnerName(String ownerName) { this.ownerName = ownerName; }
+    public String getHouseName() {
+        return houseName;
+    }
 
-    public String getSubNo() { return subNo; }
-    public void setSubNo(String subNo) { this.subNo = subNo; }
+    public void setHouseName(String houseName) {
+        this.houseName = houseName;
+    }
 
-    public String getDistId() { return distId; }
-    public void setDistId(String distId) { this.distId = distId; }
+    public String getOwnerName() {
+        return ownerName;
+    }
 
-    public String getLocalBodyName() { return localBodyName; }
-    public void setLocalBodyName(String localBodyName) { this.localBodyName = localBodyName; }
+    public void setOwnerName(String ownerName) {
+        this.ownerName = ownerName;
+    }
 
-    public int getWardNo() { return wardNo; }
-    public void setWardNo(int wardNo) { this.wardNo = wardNo; }
+    public String getSubNo() {
+        return subNo;
+    }
+
+    public void setSubNo(String subNo) {
+        this.subNo = subNo;
+    }
+
+    public String getDistId() {
+        return distId;
+    }
+
+    public void setDistId(String distId) {
+        this.distId = distId;
+    }
+
+    public String getLocalBodyName() {
+        return localBodyName;
+    }
+
+    public void setLocalBodyName(String localBodyName) {
+        this.localBodyName = localBodyName;
+    }
+
+    public int getWardNo() {
+        return wardNo;
+    }
+
+    public void setWardNo(int wardNo) {
+        this.wardNo = wardNo;
+    }
 }

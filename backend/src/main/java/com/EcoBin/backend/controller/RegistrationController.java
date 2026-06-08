@@ -26,10 +26,7 @@ public class RegistrationController {
     private CollectionWorkerRepository collectionWorkerRepository;
 
     @Autowired
-    private ZoneKottayamRepository zonesKottayamRepository;
-
-    @Autowired
-    private ZoneErnakulamRepository zonesErnakulamRepository;
+    private OfficeStaffRepository officeStaffRepository; // Linked your new repository here
 
     // --- User Verification Request DTO ---
     public static class UserVerifyRequest {
@@ -44,14 +41,12 @@ public class RegistrationController {
 
     @PostMapping("/user/verify")
     public ResponseEntity<?> verifyUserHouse(@RequestBody UserVerifyRequest request) {
-        // Find district ID from district name
         Optional<StateDist> stateDistOpt = stateDistRepository.findByDistName(request.districtName);
         if (!stateDistOpt.isPresent()) {
             return ResponseEntity.ok("House not found_please Register your house with Government!");
         }
         String distId = stateDistOpt.get().getDistId();
 
-        // Check in government house details database
         Optional<HouseDetails> houseOpt = houseDetailsRepository
                 .findByHouseNumberAndHouseNameAndOwnerNameAndSubNoAndDistIdAndLocalBodyNameAndWardNo(
                         request.houseNumber, request.houseName, request.ownerName, request.subNo,
@@ -61,43 +56,31 @@ public class RegistrationController {
             return ResponseEntity.ok("House not found_please Register your house with Government!");
         }
 
-        // Check if already registered in Registered_user collection
         Optional<RegisteredUser> existingUserOpt = registeredUserRepository.findByHouseNumber(request.houseNumber);
         if (existingUserOpt.isPresent()) {
             RegisteredUser existingUser = existingUserOpt.get();
-            // If the user already has a password set, they are fully active
             if (existingUser.getPassword() != null && !existingUser.getPassword().isEmpty()) {
                 return ResponseEntity.ok("account already exist");
             }
-            // If partial registration exists, return the assigned houseId
             return ResponseEntity.ok(Map.of("houseId", existingUser.getHouseId()));
         }
 
-        // --- FIXED ZONING FIELD CALLS ---
-        String zoneId = null;
-        if ("Kottayam".equalsIgnoreCase(request.districtName) || "Dist-05".equalsIgnoreCase(distId)) {
-            List<ZoneKottayam> zones = zonesKottayamRepository.findByLocalBodyName(request.localBodyName);
-            for (ZoneKottayam z : zones) {
-                if (z.getWards() != null && z.getWards().contains(request.wardNo)) { // Fixed from getWardNumbers()
-                    zoneId = z.getZoneId();
-                    break;
-                }
-            }
-        } else if ("Ernakulam".equalsIgnoreCase(request.districtName) || "Dist-06".equalsIgnoreCase(distId)) {
-            List<ZoneErnakulam> zones = zonesErnakulamRepository.findByLocalBodyName(request.localBodyName);
-            for (ZoneErnakulam z : zones) {
-                if (z.getWards() != null && z.getWards().contains(request.wardNo)) { // Fixed from getWardNumbers()
-                    zoneId = z.getZoneId();
-                    break;
-                }
-            }
-        }
-
-        // Generate clean unique house tracking ID
         String uniqueHouseId = "house-" + UUID.randomUUID().toString().substring(0, 8);
 
-        // Save initial partial registration document
-        RegisteredUser newUser = new RegisteredUser(uniqueHouseId, request.houseNumber, request.ownerName, zoneId);
+        RegisteredUser newUser = new RegisteredUser();
+        newUser.setHouseId(uniqueHouseId);
+        newUser.setHouseNumber(request.houseNumber);
+        newUser.setUserName(request.ownerName);
+        newUser.setZoneId("UNZONED");
+
+        newUser.setHouseName(request.houseName);
+        newUser.setSubNo(request.subNo);
+        newUser.setDistId(distId);
+        newUser.setPanchayathOrMunicipalityName(request.localBodyName);
+        newUser.setWardNo(request.wardNo);
+        newUser.setPendingPayment(0.0);
+        newUser.setPoints(0);
+
         registeredUserRepository.save(newUser);
 
         return ResponseEntity.ok(Map.of("houseId", uniqueHouseId));
@@ -113,6 +96,11 @@ public class RegistrationController {
 
     @PostMapping("/user/complete")
     public ResponseEntity<?> completeUserRegistration(@RequestBody UserCompleteRequest request) {
+        Optional<RegisteredUser> emailCheckOpt = registeredUserRepository.findByEmailId(request.emailId);
+        if (emailCheckOpt.isPresent() && emailCheckOpt.get().getPassword() != null) {
+            return ResponseEntity.badRequest().body("Email identifier already registered to an account");
+        }
+
         Optional<RegisteredUser> userOpt = registeredUserRepository.findById(request.houseId);
         if (!userOpt.isPresent()) {
             return ResponseEntity.status(404).body("User not found");
@@ -122,6 +110,8 @@ public class RegistrationController {
         user.setPassword(request.password);
         user.setPhoneNumber(request.phoneNumber);
         user.setEmailId(request.emailId);
+        user.setZoneId("ZONE-DEFAULT");
+
         registeredUserRepository.save(user);
 
         return ResponseEntity.ok("Registration complete status");
@@ -155,7 +145,6 @@ public class RegistrationController {
                 request.district, request.localBodyName, request.ward, request.consent,
                 generatedPassword, "WORKER");
 
-        // Assigning metrics matching your operational region data
         worker.setScheduledZoneName("Zone-1-" + request.district);
         worker.setNumberOfHouses(15);
         worker.setWardNumber(request.ward != null ? request.ward : 1);
@@ -168,19 +157,18 @@ public class RegistrationController {
                 "password", generatedPassword));
     }
 
-    // --- Office Staff Registration Request DTO ---
+    // --- Office Staff Registration Request DTO (Washed down fields) ---
     public static class StaffRegisterRequest {
         public String name;
+        public String designation;
         public String phoneNumber;
         public String emailId;
-        public String district;
-        public Boolean consent;
     }
 
     @PostMapping("/staff")
     public ResponseEntity<?> registerOfficeStaff(@RequestBody StaffRegisterRequest request) {
-        Optional<CollectionWorker> existingOpt = collectionWorkerRepository
-                .findByNameAndPhoneNumberAndEmailId(request.name, request.phoneNumber, request.emailId);
+        // Look up against your separate office staff directory
+        Optional<OfficeStaff> existingOpt = officeStaffRepository.findByEmail(request.emailId);
 
         if (existingOpt.isPresent()) {
             return ResponseEntity.ok("account already exist");
@@ -189,17 +177,17 @@ public class RegistrationController {
         String staffId = "CS-" + (1000 + new Random().nextInt(9000));
         String generatedPassword = generateStrongPassword();
 
-        CollectionWorker staff = new CollectionWorker(
-                staffId, request.name, request.phoneNumber, request.emailId,
-                request.district, null, null, request.consent,
-                generatedPassword, "OFFICE_STAFF");
+        // Building an entity targeting your standalone document model configuration
+        OfficeStaff staff = new OfficeStaff(
+                staffId,
+                request.name,
+                request.designation != null ? request.designation : "Office Staff",
+                request.emailId,
+                request.phoneNumber,
+                generatedPassword);
 
-        staff.setScheduledZoneName("N/A");
-        staff.setNumberOfHouses(0);
-        staff.setWardNumber(0);
-        staff.setVillageName("N/A");
-
-        collectionWorkerRepository.save(staff);
+        // Saves precisely inside the "Office_staff" collection space
+        officeStaffRepository.save(staff);
 
         return ResponseEntity.ok(Map.of(
                 "collection_worker_id", staffId,

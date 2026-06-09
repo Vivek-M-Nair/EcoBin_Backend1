@@ -3,6 +3,8 @@ package com.EcoBin.backend.Model;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
 import org.springframework.data.mongodb.core.mapping.Field;
+import java.util.ArrayList;
+import java.util.List;
 
 @Document(collection = "Zone_house_detail")
 public class ZoneHouseDetail {
@@ -22,7 +24,7 @@ public class ZoneHouseDetail {
     private String ownerName;
 
     @Field("last_collected_date")
-    private String lastCollectedDate;
+    private List<String> lastCollectedDate = new ArrayList<>();
 
     @Field("next_collected_date")
     private String nextCollectedDate;
@@ -39,7 +41,7 @@ public class ZoneHouseDetail {
     public ZoneHouseDetail() {}
 
     public ZoneHouseDetail(String registeredUserId, String zoneId, int wardNumber, String houseNumber,
-                           String ownerName, String lastCollectedDate, String nextCollectedDate,
+                           String ownerName, List<String> lastCollectedDate, String nextCollectedDate,
                            String collectionStatus, double amountPending, String otp) {
         this.registeredUserId = registeredUserId;
         this.zoneId = zoneId;
@@ -93,11 +95,11 @@ public class ZoneHouseDetail {
         this.ownerName = ownerName;
     }
 
-    public String getLastCollectedDate() {
+    public List<String> getLastCollectedDate() {
         return lastCollectedDate;
     }
 
-    public void setLastCollectedDate(String lastCollectedDate) {
+    public void setLastCollectedDate(List<String> lastCollectedDate) {
         this.lastCollectedDate = lastCollectedDate;
     }
 

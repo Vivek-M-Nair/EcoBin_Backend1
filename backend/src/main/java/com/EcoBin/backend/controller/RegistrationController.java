@@ -2,6 +2,7 @@ package com.EcoBin.backend.controller;
 
 import com.EcoBin.backend.Model.*;
 import com.EcoBin.backend.repository.*;
+import com.EcoBin.backend.service.ZoningService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -28,6 +29,9 @@ public class RegistrationController {
     @Autowired
     private OfficeStaffRepository officeStaffRepository; // Linked your new repository here
 
+    @Autowired
+    private ZoningService zoningService;
+
     // --- User Verification Request DTO ---
     public static class UserVerifyRequest {
         public String districtName;
@@ -41,22 +45,39 @@ public class RegistrationController {
 
     @PostMapping("/user/verify")
     public ResponseEntity<?> verifyUserHouse(@RequestBody UserVerifyRequest request) {
-        Optional<StateDist> stateDistOpt = stateDistRepository.findByDistName(request.districtName);
+        if (request.districtName == null || request.houseNumber == null) {
+            return ResponseEntity.ok("House not found_please Register your house with Government!");
+        }
+
+        Optional<StateDist> stateDistOpt = stateDistRepository.findAll().stream()
+                .filter(sd -> sd.getDistName() != null && sd.getDistName().trim().equalsIgnoreCase(request.districtName.trim()))
+                .findFirst();
+
         if (!stateDistOpt.isPresent()) {
             return ResponseEntity.ok("House not found_please Register your house with Government!");
         }
         String distId = stateDistOpt.get().getDistId();
 
-        Optional<HouseDetails> houseOpt = houseDetailsRepository
-                .findByHouseNumberAndHouseNameAndOwnerNameAndSubNoAndDistIdAndLocalBodyNameAndWardNo(
-                        request.houseNumber, request.houseName, request.ownerName, request.subNo,
-                        distId, request.localBodyName, request.wardNo);
+        Optional<HouseDetails> houseOpt = houseDetailsRepository.findById(request.houseNumber.trim());
 
         if (!houseOpt.isPresent()) {
             return ResponseEntity.ok("House not found_please Register your house with Government!");
         }
 
-        Optional<RegisteredUser> existingUserOpt = registeredUserRepository.findByHouseNumber(request.houseNumber);
+        HouseDetails house = houseOpt.get();
+
+        boolean isMatch = trimIgnoreCase(house.getHouseName()).equals(trimIgnoreCase(request.houseName))
+                && trimIgnoreCase(house.getOwnerName()).equals(trimIgnoreCase(request.ownerName))
+                && trimIgnoreCase(house.getSubNo()).equals(trimIgnoreCase(request.subNo))
+                && trimIgnoreCase(house.getDistId()).equals(trimIgnoreCase(distId))
+                && trimIgnoreCase(house.getLocalBodyName()).equals(trimIgnoreCase(request.localBodyName))
+                && house.getWardNo() == request.wardNo;
+
+        if (!isMatch) {
+            return ResponseEntity.ok("House not found_please Register your house with Government!");
+        }
+
+        Optional<RegisteredUser> existingUserOpt = registeredUserRepository.findByHouseNumber(request.houseNumber.trim());
         if (existingUserOpt.isPresent()) {
             RegisteredUser existingUser = existingUserOpt.get();
             if (existingUser.getPassword() != null && !existingUser.getPassword().isEmpty()) {
@@ -69,21 +90,25 @@ public class RegistrationController {
 
         RegisteredUser newUser = new RegisteredUser();
         newUser.setHouseId(uniqueHouseId);
-        newUser.setHouseNumber(request.houseNumber);
-        newUser.setUserName(request.ownerName);
+        newUser.setHouseNumber(request.houseNumber.trim());
+        newUser.setUserName(house.getOwnerName()); // Use official government database owner name
         newUser.setZoneId("UNZONED");
 
-        newUser.setHouseName(request.houseName);
-        newUser.setSubNo(request.subNo);
+        newUser.setHouseName(house.getHouseName());
+        newUser.setSubNo(house.getSubNo());
         newUser.setDistId(distId);
-        newUser.setPanchayathOrMunicipalityName(request.localBodyName);
-        newUser.setWardNo(request.wardNo);
+        newUser.setPanchayathOrMunicipalityName(house.getLocalBodyName());
+        newUser.setWardNo(house.getWardNo());
         newUser.setPendingPayment(0.0);
         newUser.setPoints(0);
 
         registeredUserRepository.save(newUser);
 
         return ResponseEntity.ok(Map.of("houseId", uniqueHouseId));
+    }
+
+    private String trimIgnoreCase(String val) {
+        return val == null ? "" : val.trim().toLowerCase();
     }
 
     // --- User Registration Completion Request DTO ---
@@ -110,7 +135,10 @@ public class RegistrationController {
         user.setPassword(request.password);
         user.setPhoneNumber(request.phoneNumber);
         user.setEmailId(request.emailId);
-        user.setZoneId("ZONE-DEFAULT");
+
+        // Assign zone using concurrent ward zoning logic
+        String zoneId = zoningService.assignUserToZone(user);
+        user.setZoneId(zoneId);
 
         registeredUserRepository.save(user);
 

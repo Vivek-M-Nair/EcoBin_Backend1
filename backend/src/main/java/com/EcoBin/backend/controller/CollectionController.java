@@ -194,15 +194,4 @@ public class CollectionController {
                 "message", "Zone " + request.zoneId + " collection marked complete for " + request.collectionDate));
     }
 
-    // ===========================
-    // 7. TRIGGER WORKER ASSIGNMENT (admin/scheduled)
-    // ===========================
-
-    @PostMapping("/assign-workers")
-    public ResponseEntity<?> triggerWorkerAssignment() {
-        schedulingService.assignWorkersForUpcomingCollections();
-        return ResponseEntity.ok(Map.of(
-                "status", "success",
-                "message", "Worker assignment process triggered for collections 2 days from now."));
-    }
 }

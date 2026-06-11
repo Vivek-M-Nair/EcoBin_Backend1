@@ -14,6 +14,7 @@ import java.util.*;
  *
  * Role-key based access: passkey "office_pass" required for office-staff-only endpoints.
  */
+@CrossOrigin(origins = "*", allowedHeaders = "*")
 @RestController
 @RequestMapping("/api/worker")
 public class WorkerController {
@@ -115,12 +116,16 @@ public class WorkerController {
         public String workerId;
         public double amount;
         public String image; // Base64 receipt
+        public String report; // report description
+        public String paymentMethod;
+        public double cashCollected;
     }
 
     @PostMapping("/expense")
     public ResponseEntity<?> submitExpense(@RequestBody ExpenseDTO request) {
         Map<String, Object> result = workerService.submitExpense(
-                request.workerId, request.amount, request.image);
+                request.workerId, request.amount, request.image, request.report,
+                request.paymentMethod, request.cashCollected);
         return ResponseEntity.ok(result);
     }
 
@@ -139,6 +144,67 @@ public class WorkerController {
             return ResponseEntity.status(403).body(Map.of("status", "error", "message", "Unauthorized. Invalid passkey."));
         }
         Map<String, Object> result = workerService.approveExpense(request.expenseId);
+        return ResponseEntity.ok(result);
+    }
+
+    // ===========================
+    // 7a. REJECT/DELETE/VIEW EXPENSES (by office staff)
+    // ===========================
+
+    public static class ExpenseRejectionDTO {
+        public String expenseId;
+        public String reason;
+        public String passkey;
+    }
+
+    @PostMapping("/expense/reject")
+    public ResponseEntity<?> rejectExpense(@RequestBody ExpenseRejectionDTO request) {
+        if (!isAuthorized(request.passkey)) {
+            return ResponseEntity.status(403).body(Map.of("status", "error", "message", "Unauthorized. Invalid passkey."));
+        }
+        Map<String, Object> result = workerService.rejectExpense(request.expenseId, request.reason);
+        return ResponseEntity.ok(result);
+    }
+
+    @DeleteMapping("/expense/delete/{expenseId}")
+    public ResponseEntity<?> deleteExpense(@PathVariable String expenseId, @RequestParam String passkey) {
+        if (!isAuthorized(passkey)) {
+            return ResponseEntity.status(403).body(Map.of("status", "error", "message", "Unauthorized. Invalid passkey."));
+        }
+        Map<String, Object> result = workerService.deleteExpense(expenseId);
+        return ResponseEntity.ok(result);
+    }
+
+    @GetMapping("/expense/all")
+    public ResponseEntity<?> getAllExpenses(@RequestParam String passkey) {
+        if (!isAuthorized(passkey)) {
+            return ResponseEntity.status(403).body(Map.of("status", "error", "message", "Unauthorized. Invalid passkey."));
+        }
+        List<Map<String, Object>> expenses = workerService.getAllExpenses();
+        return ResponseEntity.ok(Map.of("status", "success", "expenses", expenses));
+    }
+
+    public static class SettlePayDTO {
+        public String workerId;
+        public String passkey;
+    }
+
+    @PostMapping("/settle-pay")
+    public ResponseEntity<?> settleWorkerPay(@RequestBody SettlePayDTO request) {
+        if (!isAuthorized(request.passkey)) {
+            return ResponseEntity.status(403).body(Map.of("status", "error", "message", "Unauthorized. Invalid passkey."));
+        }
+        Map<String, Object> result = workerService.settleWorkerPay(request.workerId);
+        return ResponseEntity.ok(result);
+    }
+
+    // ===========================
+    // 7b. VIEW WORKER ASSIGNMENTS (by worker)
+    // ===========================
+
+    @GetMapping("/{workerId}/assignments")
+    public ResponseEntity<?> getWorkerAssignments(@PathVariable String workerId) {
+        List<Map<String, Object>> result = workerService.getWorkerAssignments(workerId);
         return ResponseEntity.ok(result);
     }
 
@@ -163,6 +229,12 @@ public class WorkerController {
         }
         List<LeaveRequest> requests = workerService.getPendingLeaveRequests();
         return ResponseEntity.ok(Map.of("status", "success", "leaveRequests", requests));
+    }
+
+    @GetMapping("/profile/{workerId}")
+    public ResponseEntity<?> getWorkerProfile(@PathVariable String workerId) {
+        Map<String, Object> result = workerService.getWorkerProfile(workerId);
+        return ResponseEntity.ok(result);
     }
 
     // ===========================

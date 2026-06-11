@@ -43,6 +43,9 @@ public class CollectionWorker {
     @Field("village_name")
     private String villageName;
 
+    @Field("add_on_salary")
+    private Double addOnSalary = 0.0;
+
     public CollectionWorker() {}
 
     public CollectionWorker(String collectionWorkerId, String name, String phoneNumber, String emailId,
@@ -102,4 +105,13 @@ public class CollectionWorker {
 
     public String getVillageName() { return villageName; }
     public void setVillageName(String villageName) { this.villageName = villageName; }
+
+    public Double getAddOnSalary() { return addOnSalary != null ? addOnSalary : 0.0; }
+    public void setAddOnSalary(Double addOnSalary) { this.addOnSalary = addOnSalary; }
+
+    @Field("to_pay_amount")
+    private Double toPayAmount = 0.0;
+
+    public Double getToPayAmount() { return toPayAmount != null ? toPayAmount : 0.0; }
+    public void setToPayAmount(Double toPayAmount) { this.toPayAmount = toPayAmount; }
 }

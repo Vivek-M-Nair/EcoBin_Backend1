@@ -26,6 +26,7 @@ public class WorkerService {
     @Autowired private CollectionScheduleRepository scheduleRepository;
     @Autowired private ZoneHouseDetailRepository zoneHouseDetailRepository;
     @Autowired private RegisteredUserPaymentRepository paymentRepository;
+    @Autowired private RegisteredUserRepository registeredUserRepository;
 
     // ===========================
     // 1. LEAVE REQUEST
@@ -34,15 +35,23 @@ public class WorkerService {
     public Map<String, Object> submitLeaveRequest(String workerId, String leaveDate, String reason) {
         Map<String, Object> result = new HashMap<>();
 
-        Optional<CollectionWorker> workerOpt = workerRepository.findById(workerId);
-        if (!workerOpt.isPresent()) {
+        if (workerId == null) {
             result.put("status", "error");
-            result.put("message", "Worker not found");
+            result.put("message", "Worker ID cannot be null");
+            return result;
+        }
+
+        String cleanWorkerId = workerId.trim();
+        Optional<CollectionWorker> workerOpt = workerRepository.findById(cleanWorkerId);
+        if (!workerOpt.isPresent()) {
+            System.out.println("❌ ECOBIN BACKEND: Worker lookup failed for leave request. workerId=[" + cleanWorkerId + "]");
+            result.put("status", "error");
+            result.put("message", "Worker lookup failed in database. ID: " + cleanWorkerId);
             return result;
         }
 
         LeaveRequest lr = new LeaveRequest();
-        lr.setCollectionWorkerId(workerId);
+        lr.setCollectionWorkerId(cleanWorkerId);
         lr.setName(workerOpt.get().getName());
         lr.setLeaveRequestedDate(leaveDate);
         lr.setReason(reason);
@@ -128,6 +137,22 @@ public class WorkerService {
                 houseInfo.put("paymentStatus", house.getAmountPending() > 0 ? "pending" : "paid");
                 houseInfo.put("amountPending", house.getAmountPending());
                 houseInfo.put("collectionStatus", house.getCollectionStatus());
+                
+                // Look up address
+                if (house.getRegisteredUserId() != null) {
+                    Optional<RegisteredUser> userOpt = registeredUserRepository.findById(house.getRegisteredUserId());
+                    if (userOpt.isPresent()) {
+                        RegisteredUser user = userOpt.get();
+                        String panchayath = user.getPanchayathOrMunicipalityName();
+                        int ward = user.getWardNo();
+                        houseInfo.put("address", (panchayath != null ? panchayath : "No Address") + ", Ward " + ward);
+                    } else {
+                        houseInfo.put("address", "No Address");
+                    }
+                } else {
+                    houseInfo.put("address", "No Address");
+                }
+                
                 areaDetails.add(houseInfo);
             }
         }
@@ -200,16 +225,30 @@ public class WorkerService {
      * Worker submits expense with amount and receipt image.
      * Default status: pending. Office staff verifies later.
      */
-    public Map<String, Object> submitExpense(String workerId, double amount, String image) {
+    public Map<String, Object> submitExpense(String workerId, double amount, String image, String report, String paymentMethod, double cashCollected) {
         Map<String, Object> result = new HashMap<>();
 
         CollectionExpense expense = new CollectionExpense();
         expense.setCollectionWorkerId(workerId);
         expense.setAmount(amount);
         expense.setImage(image);
+        expense.setReport(report);
+        expense.setPaymentMethod(paymentMethod);
+        expense.setCashCollected(cashCollected);
         expense.setStatus("pending");
         expense.setDate(LocalDate.now().format(DATE_FMT));
         expenseRepository.save(expense);
+
+        // Decrease worker toPayAmount if paid online
+        if ("online".equalsIgnoreCase(paymentMethod) && cashCollected > 0) {
+            Optional<CollectionWorker> workerOpt = workerRepository.findById(workerId);
+            if (workerOpt.isPresent()) {
+                CollectionWorker worker = workerOpt.get();
+                double currentToPay = worker.getToPayAmount() != null ? worker.getToPayAmount() : 0.0;
+                worker.setToPayAmount(Math.max(0.0, currentToPay - cashCollected));
+                workerRepository.save(worker);
+            }
+        }
 
         result.put("status", "success");
         result.put("expenseId", expense.getExpenseId());
@@ -233,16 +272,168 @@ public class WorkerService {
         CollectionExpense expense = expOpt.get();
         expense.setStatus("approved");
         expense.setAddAmountToBePaid(expense.getAddAmountToBePaid() + expense.getAmount());
-        expense.setAmount(0); // Cleared from pending expense
+        double originalAmount = expense.getAmount();
         expenseRepository.save(expense);
+
+        // Add that amount to worker's addOnSalary field
+        Optional<CollectionWorker> workerOpt = workerRepository.findById(expense.getCollectionWorkerId());
+        if (workerOpt.isPresent()) {
+            CollectionWorker worker = workerOpt.get();
+            double currentAddOn = worker.getAddOnSalary() != null ? worker.getAddOnSalary() : 0.0;
+            worker.setAddOnSalary(currentAddOn + originalAmount);
+            workerRepository.save(worker);
+        }
 
         result.put("status", "success");
         result.put("message", "Expense approved. ₹" + expense.getAddAmountToBePaid() + " added to worker reimbursement.");
         return result;
     }
 
+    /**
+     * Office staff rejects expense with reason.
+     */
+    public Map<String, Object> rejectExpense(String expenseId, String reason) {
+        Map<String, Object> result = new HashMap<>();
+
+        Optional<CollectionExpense> expOpt = expenseRepository.findById(expenseId);
+        if (!expOpt.isPresent()) {
+            result.put("status", "error");
+            result.put("message", "Expense not found");
+            return result;
+        }
+
+        CollectionExpense expense = expOpt.get();
+        expense.setStatus("rejected");
+        expense.setRejectionReason(reason);
+        expenseRepository.save(expense);
+
+        result.put("status", "success");
+        result.put("message", "Expense rejected with reason: " + reason);
+        return result;
+    }
+
+    /**
+     * Office staff deletes expense record.
+     */
+    public Map<String, Object> deleteExpense(String expenseId) {
+        Map<String, Object> result = new HashMap<>();
+        if (!expenseRepository.existsById(expenseId)) {
+            result.put("status", "error");
+            result.put("message", "Expense not found");
+            return result;
+        }
+        expenseRepository.deleteById(expenseId);
+        result.put("status", "success");
+        result.put("message", "Expense deleted successfully");
+        return result;
+    }
+
+    /**
+     * Get all expenses for office staff view.
+     */
+    public List<Map<String, Object>> getAllExpenses() {
+        List<CollectionExpense> list = expenseRepository.findAll();
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (CollectionExpense exp : list) {
+            Map<String, Object> map = new HashMap<>();
+            map.put("expenseId", exp.getExpenseId());
+            map.put("collectionWorkerId", exp.getCollectionWorkerId());
+            map.put("amount", exp.getAmount());
+            map.put("image", exp.getImage());
+            map.put("status", exp.getStatus());
+            map.put("addAmountToBePaid", exp.getAddAmountToBePaid());
+            map.put("date", exp.getDate());
+            map.put("report", exp.getReport());
+            map.put("rejectionReason", exp.getRejectionReason());
+            map.put("paymentMethod", exp.getPaymentMethod());
+            map.put("cashCollected", exp.getCashCollected());
+
+            double toPay = 0.0;
+            if (exp.getCollectionWorkerId() != null) {
+                Optional<CollectionWorker> workerOpt = workerRepository.findById(exp.getCollectionWorkerId());
+                if (workerOpt.isPresent()) {
+                    toPay = workerOpt.get().getToPayAmount();
+                }
+            }
+            map.put("toPayAmount", toPay);
+            result.add(map);
+        }
+        return result;
+    }
+
+    /**
+     * Settle worker remittance pay to zero.
+     */
+    public Map<String, Object> settleWorkerPay(String workerId) {
+        Map<String, Object> result = new HashMap<>();
+        Optional<CollectionWorker> workerOpt = workerRepository.findById(workerId);
+        if (!workerOpt.isPresent()) {
+            result.put("status", "error");
+            result.put("message", "Worker not found");
+            return result;
+        }
+        CollectionWorker worker = workerOpt.get();
+        worker.setToPayAmount(0.0);
+        workerRepository.save(worker);
+        result.put("status", "success");
+        result.put("message", "Worker remittance balance settled to zero.");
+        return result;
+    }
+
     // ===========================
-    // 5. GET WORKER SCHEDULE
+    // 5. GET WORKER ASSIGNMENTS
+    // ===========================
+
+    public List<Map<String, Object>> getWorkerAssignments(String workerId) {
+        List<CollectionSchedule> schedules = scheduleRepository.findByCollectionWorkerAssigned(workerId);
+        List<Map<String, Object>> list = new ArrayList<>();
+        for (CollectionSchedule schedule : schedules) {
+            Map<String, Object> map = new HashMap<>();
+            map.put("scheduleId", schedule.getScheduleId());
+            map.put("zoneId", schedule.getZoneId());
+            map.put("scheduledDate", schedule.getScheduledDate());
+            map.put("collectionWorkerAssigned", schedule.getCollectionWorkerAssigned());
+            map.put("amountPerHouse", schedule.getAmountPerHouse());
+            String localBody = schedule.getLocalBodyName();
+            if (localBody == null || localBody.trim().isEmpty() || "N/A".equalsIgnoreCase(localBody)) {
+                List<RegisteredUser> users = registeredUserRepository.findByZoneId(schedule.getZoneId());
+                if (users != null && !users.isEmpty()) {
+                    for (RegisteredUser user : users) {
+                        if (user.getPanchayathOrMunicipalityName() != null && !user.getPanchayathOrMunicipalityName().trim().isEmpty()) {
+                            localBody = user.getPanchayathOrMunicipalityName();
+                            break;
+                        }
+                    }
+                }
+            }
+            if (localBody == null || localBody.trim().isEmpty()) {
+                localBody = "N/A";
+            }
+            map.put("localBodyName", localBody);
+            map.put("district", schedule.getDistrict());
+            map.put("status", schedule.getStatus());
+
+            // Fetch unique sorted ward numbers for this zone
+            List<ZoneHouseDetail> houses = zoneHouseDetailRepository.findByZoneId(schedule.getZoneId());
+            List<Integer> wardNumbers = houses.stream()
+                    .map(ZoneHouseDetail::getWardNumber)
+                    .distinct()
+                    .sorted()
+                    .collect(Collectors.toList());
+            map.put("wardNumbers", wardNumbers);
+            
+            // Format address: panchayath/municipality name and ward numbers
+            String wardsStr = wardNumbers.stream().map(Object::toString).collect(Collectors.joining(", "));
+            String address = localBody + (wardsStr.isEmpty() ? "" : " (Ward " + wardsStr + ")");
+            map.put("address", address);
+
+            list.add(map);
+        }
+        return list;
+    }
+
+    // ===========================
+    // 6. GET WORKER SCHEDULE
     // ===========================
 
     public Map<String, Object> getWorkerSchedule(String workerId) {
@@ -259,11 +450,39 @@ public class WorkerService {
         result.put("status", "success");
         result.put("workerId", cws.getCollectionWorkerId());
         result.put("name", cws.getName());
-        result.put("assignedPanchayath", cws.getAssignedPanchayath());
+        String assignedPanchayath = cws.getAssignedPanchayath();
+        if (assignedPanchayath == null || assignedPanchayath.trim().isEmpty() || "N/A".equalsIgnoreCase(assignedPanchayath)) {
+            List<CollectionSchedule> schedules = scheduleRepository.findByCollectionWorkerAssigned(workerId);
+            if (!schedules.isEmpty()) {
+                assignedPanchayath = schedules.get(0).getLocalBodyName();
+            }
+        }
+        if (assignedPanchayath == null || assignedPanchayath.trim().isEmpty() || "N/A".equalsIgnoreCase(assignedPanchayath)) {
+            List<RegisteredUser> users = registeredUserRepository.findByZoneId(cws.getAssignedZoneId());
+            if (users != null && !users.isEmpty()) {
+                for (RegisteredUser user : users) {
+                    if (user.getPanchayathOrMunicipalityName() != null && !user.getPanchayathOrMunicipalityName().trim().isEmpty()) {
+                        assignedPanchayath = user.getPanchayathOrMunicipalityName();
+                        break;
+                    }
+                }
+            }
+        }
+        result.put("assignedPanchayath", assignedPanchayath != null ? assignedPanchayath : "N/A");
         result.put("assignedZoneId", cws.getAssignedZoneId());
         result.put("numberOfAssignedDates", cws.getNumberOfAssignedDates());
         result.put("assignedDates", cws.getAssignedDates());
         result.put("leaveRequestedDate", cws.getLeaveRequestedDate());
+
+        // Fetch unique sorted ward numbers for this zone
+        List<ZoneHouseDetail> houses = zoneHouseDetailRepository.findByZoneId(cws.getAssignedZoneId());
+        List<Integer> wardNumbers = houses.stream()
+                .map(ZoneHouseDetail::getWardNumber)
+                .distinct()
+                .sorted()
+                .collect(Collectors.toList());
+        result.put("wardNumbers", wardNumbers);
+
         return result;
     }
 
@@ -277,5 +496,25 @@ public class WorkerService {
 
     public List<LeaveRequest> getAllLeaveRequests() {
         return leaveRequestRepository.findAll();
+    }
+
+    public Map<String, Object> getWorkerProfile(String workerId) {
+        Map<String, Object> result = new HashMap<>();
+        String cleanId = workerId.trim();
+        Optional<CollectionWorker> workerOpt = workerRepository.findById(cleanId);
+        if (!workerOpt.isPresent()) {
+            result.put("status", "error");
+            result.put("message", "Worker lookup failed for profile query. workerId=[" + cleanId + "]");
+            return result;
+        }
+        CollectionWorker w = workerOpt.get();
+        result.put("status", "success");
+        result.put("workerId", w.getCollectionWorkerId());
+        result.put("name", w.getName());
+        result.put("scheduledZoneName", w.getScheduledZoneName());
+        result.put("numberOfHouses", w.getNumberOfHouses());
+        result.put("wardNumber", w.getWardNumber());
+        result.put("villageName", w.getVillageName());
+        return result;
     }
 }

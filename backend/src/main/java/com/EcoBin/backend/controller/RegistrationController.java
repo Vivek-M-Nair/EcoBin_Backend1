@@ -121,6 +121,13 @@ public class RegistrationController {
 
     @PostMapping("/user/complete")
     public ResponseEntity<?> completeUserRegistration(@RequestBody UserCompleteRequest request) {
+        if (request.phoneNumber == null || !request.phoneNumber.trim().matches("^\\d{10}$")) {
+            return ResponseEntity.badRequest().body("Phone number must be exactly 10 digits");
+        }
+        if (request.emailId == null || !request.emailId.trim().contains("@") || !request.emailId.trim().endsWith(".com")) {
+            return ResponseEntity.badRequest().body("Email must contain @ and end with .com");
+        }
+
         Optional<RegisteredUser> emailCheckOpt = registeredUserRepository.findByEmailId(request.emailId);
         if (emailCheckOpt.isPresent() && emailCheckOpt.get().getPassword() != null) {
             return ResponseEntity.badRequest().body("Email identifier already registered to an account");
@@ -220,6 +227,18 @@ public class RegistrationController {
         return ResponseEntity.ok(Map.of(
                 "collection_worker_id", staffId,
                 "password", generatedPassword));
+    }
+
+    @GetMapping("/staff/all")
+    public ResponseEntity<?> getAllOfficeStaff() {
+        List<OfficeStaff> staffList = officeStaffRepository.findAll();
+        return ResponseEntity.ok(staffList);
+    }
+
+    @GetMapping("/worker/all")
+    public ResponseEntity<?> getAllCollectionWorkers() {
+        List<CollectionWorker> workerList = collectionWorkerRepository.findAll();
+        return ResponseEntity.ok(workerList);
     }
 
     private String generateStrongPassword() {

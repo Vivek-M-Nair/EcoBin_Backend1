@@ -94,9 +94,17 @@ public class LoginController {
                     for (CollectionSchedule s : schedules) {
                         if ("scheduled".equalsIgnoreCase(s.getStatus())) {
                             scheduledDate = s.getScheduledDate();
-                            workerAssigned = s.getCollectionWorkerAssigned() != null
-                                    ? s.getCollectionWorkerAssigned()
-                                    : "Not yet assigned";
+                            if (s.getCollectionWorkerAssigned() != null && !s.getCollectionWorkerAssigned().isEmpty()) {
+                                String workerId = s.getCollectionWorkerAssigned();
+                                Optional<CollectionWorker> workerOpt = collectionWorkerRepository.findById(workerId);
+                                if (workerOpt.isPresent()) {
+                                    workerAssigned = workerOpt.get().getName();
+                                } else {
+                                    workerAssigned = workerId;
+                                }
+                            } else {
+                                workerAssigned = "Not yet assigned";
+                            }
                             amount = s.getAmountPerHouse();
                             break;
                         }

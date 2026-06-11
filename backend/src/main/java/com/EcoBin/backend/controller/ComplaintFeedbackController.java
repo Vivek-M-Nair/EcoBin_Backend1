@@ -15,6 +15,7 @@ import java.util.*;
  *
  * Admin/office staff can view and manage complaints and feedback using passkey.
  */
+@CrossOrigin(origins = "*", allowedHeaders = "*")
 @RestController
 @RequestMapping("/api")
 public class ComplaintFeedbackController {
@@ -51,6 +52,38 @@ public class ComplaintFeedbackController {
                 "status", "success",
                 "complaintId", complaint.getComplaintId(),
                 "message", "Complaint submitted successfully. We will look into it."));
+    }
+
+    public static class WorkerComplaintDTO {
+        public String workerId;
+        public String houseId;
+        public String category;
+        public String description;
+        public String photoUrl;
+    }
+
+    /**
+     * Submit complaint by collection worker.
+     */
+    @PostMapping("/complaint")
+    public ResponseEntity<?> submitWorkerComplaint(@RequestBody WorkerComplaintDTO request) {
+        Complaint complaint = new Complaint();
+        String fullDescription = String.format("[%s] House: %s (Reported by Worker: %s) - %s",
+                request.category != null ? request.category : "N/A",
+                request.houseId != null ? request.houseId : "N/A",
+                request.workerId != null ? request.workerId : "N/A",
+                request.description != null ? request.description : "");
+        complaint.setComplaintDescription(fullDescription);
+        if (request.photoUrl != null && !request.photoUrl.trim().isEmpty()) {
+            complaint.setImage(request.photoUrl);
+        }
+        complaint.setStatus("pending");
+        complaintRepository.save(complaint);
+
+        return ResponseEntity.ok(Map.of(
+                "status", "success",
+                "complaintId", complaint.getComplaintId(),
+                "message", "Complaint logged successfully"));
     }
 
     /**

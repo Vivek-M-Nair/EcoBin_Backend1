@@ -6,6 +6,9 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
+import java.util.List;
+import com.EcoBin.backend.Model.CollectionSchedule;
+import com.EcoBin.backend.repository.CollectionScheduleRepository;
 
 /**
  * REST controller mapping structural administrative scheduling demands
@@ -18,6 +21,9 @@ public class ScheduleController {
 
     @Autowired
     private SchedulingService schedulingService;
+
+    @Autowired
+    private CollectionScheduleRepository collectionScheduleRepository;
 
     /**
      * Endpoint triggered when the office staff clicks the main "Schedule" action
@@ -52,12 +58,27 @@ public class ScheduleController {
         try {
             schedulingService.assignWorkersForAllUpcoming();
             return ResponseEntity.ok(Map.of(
-                    "status", "success",
-                    "message", "Collection workers successfully assigned to all upcoming scheduled zones. Backup requirements satisfied."));
+                     "status", "success",
+                     "message", "Collection workers successfully assigned to all upcoming scheduled zones. Backup requirements satisfied."));
         } catch (Exception e) {
             return ResponseEntity.status(500).body(Map.of(
                     "status", "error",
                     "message", "Worker assignment failed: " + e.getMessage()));
         }
     }
+
+    /**
+     * Expose all collection schedules (office staff/admin only).
+     */
+    @GetMapping("/schedules")
+    public ResponseEntity<?> getAllSchedules(@RequestParam String passkey) {
+        if (!OFFICE_STAFF_KEY.equals(passkey) && !ADMIN_KEY.equals(passkey)) {
+            return ResponseEntity.status(403).body(Map.of("status", "error", "message", "Unauthorized"));
+        }
+        List<CollectionSchedule> schedules = collectionScheduleRepository.findAll();
+        return ResponseEntity.ok(Map.of("status", "success", "schedules", schedules));
+    }
+
+    private static final String OFFICE_STAFF_KEY = "office_pass";
+    private static final String ADMIN_KEY = "adm_pass";
 }

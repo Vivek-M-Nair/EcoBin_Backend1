@@ -27,6 +27,12 @@ public class CollectionExpense {
     @Field("date")
     private String date;
 
+    @Field("report")
+    private String report;
+
+    @Field("rejection_reason")
+    private String rejectionReason;
+
     public CollectionExpense() {}
 
     public CollectionExpense(String expenseId, String collectionWorkerId, double amount, String image, String status, double addAmountToBePaid, String date) {
@@ -37,6 +43,18 @@ public class CollectionExpense {
         this.status = status;
         this.addAmountToBePaid = addAmountToBePaid;
         this.date = date;
+    }
+
+    public CollectionExpense(String expenseId, String collectionWorkerId, double amount, String image, String status, double addAmountToBePaid, String date, String report, String rejectionReason) {
+        this.expenseId = expenseId;
+        this.collectionWorkerId = collectionWorkerId;
+        this.amount = amount;
+        this.image = image;
+        this.status = status;
+        this.addAmountToBePaid = addAmountToBePaid;
+        this.date = date;
+        this.report = report;
+        this.rejectionReason = rejectionReason;
     }
 
     public String getExpenseId() {
@@ -93,5 +111,43 @@ public class CollectionExpense {
 
     public void setDate(String date) {
         this.date = date;
+    }
+
+    public String getReport() {
+        return report;
+    }
+
+    public void setReport(String report) {
+        this.report = report;
+    }
+
+    public String getRejectionReason() {
+        return rejectionReason;
+    }
+
+    public void setRejectionReason(String rejectionReason) {
+        this.rejectionReason = rejectionReason;
+    }
+
+    @Field("payment_method")
+    private String paymentMethod;
+
+    @Field("cash_collected")
+    private double cashCollected = 0.0;
+
+    public String getPaymentMethod() {
+        return paymentMethod;
+    }
+
+    public void setPaymentMethod(String paymentMethod) {
+        this.paymentMethod = paymentMethod;
+    }
+
+    public double getCashCollected() {
+        return cashCollected;
+    }
+
+    public void setCashCollected(double cashCollected) {
+        this.cashCollected = cashCollected;
     }
 }

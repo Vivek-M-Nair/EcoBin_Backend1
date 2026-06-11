@@ -60,10 +60,15 @@ public class PaymentService {
 
         paymentRepository.save(payment);
 
-        // Also update zone house detail payment status
+        // Also update zone house detail payment status and sync registered user payment & points
         Optional<RegisteredUser> userOpt = registeredUserRepository.findById(userId);
         if (userOpt.isPresent()) {
-            String zoneId = userOpt.get().getZoneId();
+            RegisteredUser user = userOpt.get();
+            user.setPendingPayment(newPending);
+            user.setPoints(user.getPoints() + pointsEarned);
+            registeredUserRepository.save(user);
+
+            String zoneId = user.getZoneId();
             List<ZoneHouseDetail> houses = zoneHouseDetailRepository.findByZoneId(zoneId);
             for (ZoneHouseDetail h : houses) {
                 if (userId.equals(h.getRegisteredUserId())) {
@@ -140,6 +145,13 @@ public class PaymentService {
                 }
                 payment.setPendingPoint(availablePoints - 500);
                 paymentRepository.save(payment);
+                
+                // Sync RegisteredUser points
+                registeredUserRepository.findById(userId).ifPresent(u -> {
+                    u.setPoints(payment.getPendingPoint());
+                    registeredUserRepository.save(u);
+                });
+
                 result.put("status", "success");
                 result.put("message", "Thank you! Your tree will be planted. 🌳 We appreciate your contribution to a greener planet!");
                 result.put("pointsUsed", 500);
@@ -154,6 +166,13 @@ public class PaymentService {
                 }
                 payment.setPendingPoint(availablePoints - 250);
                 paymentRepository.save(payment);
+
+                // Sync RegisteredUser points
+                registeredUserRepository.findById(userId).ifPresent(u -> {
+                    u.setPoints(payment.getPendingPoint());
+                    registeredUserRepository.save(u);
+                });
+
                 result.put("status", "success");
                 result.put("message", "Congratulations! You can collect your eco-friendly cup from our office near you. ☕");
                 result.put("pointsUsed", 250);
@@ -168,6 +187,12 @@ public class PaymentService {
                 }
                 payment.setPendingPoint(availablePoints - 1000);
                 paymentRepository.save(payment);
+
+                // Sync RegisteredUser points
+                registeredUserRepository.findById(userId).ifPresent(u -> {
+                    u.setPoints(payment.getPendingPoint());
+                    registeredUserRepository.save(u);
+                });
 
                 // Mark next collection as paid for this user
                 markNextCollectionAsPaid(userId);
@@ -194,7 +219,8 @@ public class PaymentService {
         // Find user's zone
         Optional<RegisteredUser> userOpt = registeredUserRepository.findById(userId);
         if (userOpt.isPresent()) {
-            String zoneId = userOpt.get().getZoneId();
+            RegisteredUser user = userOpt.get();
+            String zoneId = user.getZoneId();
 
             // Update zone house detail
             List<ZoneHouseDetail> houses = zoneHouseDetailRepository.findByZoneId(zoneId);
@@ -214,6 +240,10 @@ public class PaymentService {
                 pay.setAmountPending(0);
                 paymentRepository.save(pay);
             }
+
+            // Sync user's pending payment in RegisteredUser model
+            user.setPendingPayment(0.0);
+            registeredUserRepository.save(user);
         }
     }
 }

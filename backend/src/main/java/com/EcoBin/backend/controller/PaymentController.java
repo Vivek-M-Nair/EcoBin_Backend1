@@ -15,6 +15,12 @@ import java.util.*;
 public class PaymentController {
 
     @Autowired private PaymentService paymentService;
+    @Autowired private com.EcoBin.backend.repository.RegisteredUserPaymentRepository registeredUserPaymentRepository;
+
+    @GetMapping("/all")
+    public ResponseEntity<?> getAllPayments() {
+        return ResponseEntity.ok(Map.of("status", "success", "payments", registeredUserPaymentRepository.findAll()));
+    }
 
     // ===========================
     // 1. VIEW PENDING PAYMENT

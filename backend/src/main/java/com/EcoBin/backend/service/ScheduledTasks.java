@@ -103,4 +103,14 @@ public class ScheduledTasks {
 
         System.out.println("[SCHEDULER] Monthly expense clear completed.");
     }
+
+    /**
+     * Runs daily at 8 AM: close pending houses after 2 days from last waste collection in a zone.
+     */
+    @Scheduled(cron = "0 0 8 * * *")
+    public void dailyCloseOverduePendingHouses() {
+        System.out.println("[SCHEDULER] Running overdue pending houses close check...");
+        schedulingService.closeOverduePendingHouses();
+        System.out.println("[SCHEDULER] Overdue pending houses close check completed.");
+    }
 }

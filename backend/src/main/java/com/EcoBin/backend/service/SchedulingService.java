@@ -59,6 +59,10 @@ public class SchedulingService {
     private ZoneKottayamRepository zoneKottayamRepository;
     @Autowired
     private ZoneErnakulamRepository zoneErnakulamRepository;
+    @Autowired
+    private UserRequestedDataRepository userRequestedDataRepository;
+    @Autowired
+    private NotificationRepository notificationRepository;
 
     // ===========================
     // 1. GENERATE SCHEDULE FOR ZONE (called by scheduler or manually)
@@ -160,142 +164,99 @@ public class SchedulingService {
                 return result;
             }
 
-            // Store reason if provided
-            if (reason != null && !reason.trim().isEmpty()) {
-                ImmediateCollectionReason icr = new ImmediateCollectionReason();
-                icr.setUserId(userId);
-                icr.setReason(reason);
-                icr.setRequestedDate(LocalDate.now().format(DATE_FMT));
-                immediateCollectionReasonRepository.save(icr);
-            }
-
             // Check last collection date for this zone
             Optional<LastTimeCollection> ltcOpt = lastTimeCollectionRepository.findById(zoneId);
-            LocalDate lastCollected;
-            long daysSinceCollection;
+            LocalDate lastCollectedDate = null;
+            long daysSinceLastCollection = 999; // large default
 
-            if (ltcOpt.isPresent()) {
-                lastCollected = parseLastCollectedDate(ltcOpt.get().getLastCollectedDate());
-                daysSinceCollection = ChronoUnit.DAYS.between(lastCollected, LocalDate.now());
+            if (!ltcOpt.isPresent() || ltcOpt.get().getLastCollectedDate() == null 
+                    || ltcOpt.get().getLastCollectedDate().trim().isEmpty() 
+                    || "Never".equalsIgnoreCase(ltcOpt.get().getLastCollectedDate())
+                    || "N/A".equalsIgnoreCase(ltcOpt.get().getLastCollectedDate())) {
+                result.put("status", "error");
+                result.put("message", "Immediate waste collection request is unavailable because there is no collection history for your zone.");
+                return result;
             } else {
-                // No history; treat as > 15 days
-                lastCollected = LocalDate.now().minusDays(30);
-                daysSinceCollection = 30;
+                lastCollectedDate = parseLastCollectedDate(ltcOpt.get().getLastCollectedDate());
+                daysSinceLastCollection = ChronoUnit.DAYS.between(lastCollectedDate, LocalDate.now());
             }
 
-            // Check if a new date is already scheduled for this zone
-            List<CollectionSchedule> existingSchedules = collectionScheduleRepository.findByZoneId(zoneId);
-            boolean dateAlreadyScheduled = existingSchedules.stream()
-                    .anyMatch(s -> "scheduled".equals(s.getStatus()));
+            // Check if the next waste collection schedule is within the next 4 days
+            Optional<ZoneHouseDetail> houseOpt = zoneHouseDetailRepository.findById(userId);
+            LocalDate nextCollectedDate = null;
+            long daysUntilNextCollection = -999; // default negative value
 
-            if (daysSinceCollection > 15 || dateAlreadyScheduled) {
-                // CASE A: Reschedule zone to 17-21 days from last collection
-                return handleImmediateAfter15Days(userId, zoneId, lastCollected, dateAlreadyScheduled);
-            } else {
-                // CASE B: Before 15 days — assign dedicated worker
-                return handleImmediateBefore15Days(userId, zoneId, user);
+            if (houseOpt.isPresent() && houseOpt.get().getNextCollectedDate() != null) {
+                String nextCollectedDateStr = houseOpt.get().getNextCollectedDate();
+                if (!"Not scheduled".equalsIgnoreCase(nextCollectedDateStr) 
+                        && !"Pending assignment".equalsIgnoreCase(nextCollectedDateStr)
+                        && !nextCollectedDateStr.trim().isEmpty()) {
+                    nextCollectedDate = parseLastCollectedDate(nextCollectedDateStr);
+                    daysUntilNextCollection = ChronoUnit.DAYS.between(LocalDate.now(), nextCollectedDate);
+                }
             }
+
+            boolean isWithinLast2Days = daysSinceLastCollection <= 2;
+            boolean isNextWithin4Days = nextCollectedDate != null && daysUntilNextCollection >= 0 && daysUntilNextCollection <= 4;
+
+            if (isWithinLast2Days) {
+                result.put("status", "error");
+                result.put("message", "Immediate waste collection request is unavailable because the last collection in your zone was within the last 2 days.");
+                return result;
+            }
+            if (isNextWithin4Days) {
+                result.put("status", "error");
+                result.put("message", "Immediate waste collection request is unavailable because your next collection is already scheduled within the next 4 days.");
+                return result;
+            }
+
+            // Determine fee: if days since last collection is less than 15, fee is ₹100. Otherwise default ₹50.
+            double fee = 50.0;
+            if (daysSinceLastCollection < 15) {
+                fee = 100.0;
+            }
+
+            // Store request details
+            String lastCollectedDateStr = (ltcOpt.isPresent() && ltcOpt.get().getLastCollectedDate() != null) 
+                    ? ltcOpt.get().getLastCollectedDate() : null;
+            
+            String nextCollectedDateStr = null;
+            if (houseOpt.isPresent() && houseOpt.get().getNextCollectedDate() != null) {
+                String nd = houseOpt.get().getNextCollectedDate();
+                if (!"Not scheduled".equalsIgnoreCase(nd) 
+                        && !"Pending assignment".equalsIgnoreCase(nd)
+                        && !nd.trim().isEmpty()) {
+                    nextCollectedDateStr = nd;
+                }
+            }
+
+            UserRequestedData request = new UserRequestedData();
+            request.setId("REQ-" + UUID.randomUUID().toString().substring(0, 8));
+            request.setUserId(userId);
+            request.setZoneId(zoneId);
+            request.setPaymentAmount(fee);
+            request.setPaymentStatus("success");
+            request.setRequestedDate(LocalDate.now().format(DATE_FMT));
+            request.setLastCollectedDateInZone(lastCollectedDateStr);
+            request.setNextScheduledDate(nextCollectedDateStr);
+            request.setValidateOtp(null);
+            request.setOtpGen(null);
+            request.setStatus("pending");
+            request.setWorkerId(null);
+
+            userRequestedDataRepository.save(request);
+
+            // Add points to user immediately upon request payment
+            addPointsToUser(userId, fee, "Paid_immediate_pickup");
+
+            result.put("status", "success");
+            result.put("requestId", request.getId());
+            result.put("fee", fee);
+            result.put("message", "Immediate waste collection request registered successfully. Status: pending.");
+            return result;
         } finally {
             ZoningService.zoningLock.readLock().unlock();
         }
-    }
-
-    private Map<String, Object> handleImmediateAfter15Days(String userId, String zoneId,
-            LocalDate lastCollected,
-            boolean dateAlreadyScheduled) {
-        Map<String, Object> result = new HashMap<>();
-
-        // Reschedule to 17-21 days from last collection
-        int randomDays = 17 + new Random().nextInt(5); // 17 to 21
-        LocalDate newDate = lastCollected.plusDays(randomDays);
-        LocalDate today = LocalDate.now();
-        if (newDate.isBefore(today)) {
-            newDate = today.plusDays(1);
-        }
-        String newDateStr = newDate.format(DATE_FMT);
-
-        // Update or create schedule
-        if (dateAlreadyScheduled) {
-            List<CollectionSchedule> schedules = collectionScheduleRepository.findByZoneId(zoneId);
-            for (CollectionSchedule s : schedules) {
-                if ("scheduled".equals(s.getStatus())) {
-                    s.setScheduledDate(newDateStr);
-                    collectionScheduleRepository.save(s);
-                    break;
-                }
-            }
-        } else {
-            String scheduleId = "SCH-" + zoneId + "-" + UUID.randomUUID().toString().substring(0, 6);
-            CollectionSchedule schedule = new CollectionSchedule();
-            schedule.setScheduleId(scheduleId);
-            schedule.setZoneId(zoneId);
-            schedule.setScheduledDate(newDateStr);
-            schedule.setAmountPerHouse(NORMAL_AMOUNT);
-            schedule.setStatus("scheduled");
-            collectionScheduleRepository.save(schedule);
-        }
-
-        // Update all houses in zone: ₹50 for everyone
-        updateZoneHousesForSchedule(zoneId, newDateStr, NORMAL_AMOUNT);
-
-        // Override amount for the requester: ₹60
-        List<ZoneHouseDetail> houses = zoneHouseDetailRepository.findByZoneId(zoneId);
-        for (ZoneHouseDetail h : houses) {
-            if (userId.equals(h.getRegisteredUserId())) {
-                h.setAmountPending(IMMEDIATE_AFTER_15_AMOUNT);
-                zoneHouseDetailRepository.save(h);
-                break;
-            }
-        }
-
-        // Update requester's payment record
-        updateUserPaymentAmount(userId, IMMEDIATE_AFTER_15_AMOUNT);
-
-        result.put("status", "rescheduled");
-        result.put("newScheduledDate", newDateStr);
-        result.put("yourAmount", IMMEDIATE_AFTER_15_AMOUNT);
-        result.put("message", "Zone rescheduled. Your amount is ₹60, others ₹50.");
-        return result;
-    }
-
-    private Map<String, Object> handleImmediateBefore15Days(String userId, String zoneId, RegisteredUser user) {
-        Map<String, Object> result = new HashMap<>();
-
-        // Assign a dedicated worker for this single house
-        // Date is 1-2 days from now
-        int daysOut = 1 + new Random().nextInt(2); // 1 or 2
-        LocalDate collectionDate = LocalDate.now().plusDays(daysOut);
-        String collectionDateStr = collectionDate.format(DATE_FMT);
-
-        // Update the user's registered_user_collection
-        RegisteredUserCollection ruc = registeredUserCollectionRepository.findById(userId)
-                .orElse(new RegisteredUserCollection());
-        ruc.setUserId(userId);
-        ruc.setNextScheduledDate(collectionDateStr);
-        ruc.setLastCollectionStatus("immediate_pending");
-        registeredUserCollectionRepository.save(ruc);
-
-        // Update zone house detail
-        List<ZoneHouseDetail> houses = zoneHouseDetailRepository.findByZoneId(zoneId);
-        for (ZoneHouseDetail h : houses) {
-            if (userId.equals(h.getRegisteredUserId())) {
-                h.setNextCollectedDate(collectionDateStr);
-                h.setAmountPending(IMMEDIATE_BEFORE_15_AMOUNT);
-                h.setCollectionStatus("immediate_pending");
-                zoneHouseDetailRepository.save(h);
-                break;
-            }
-        }
-
-        // Update payment
-        updateUserPaymentAmount(userId, IMMEDIATE_BEFORE_15_AMOUNT);
-
-        result.put("status", "immediate_assigned");
-        result.put("collectionDate", collectionDateStr);
-        result.put("amount", IMMEDIATE_BEFORE_15_AMOUNT);
-        result.put("message", "A collection staff will be assigned to your house. Amount: ₹100. " +
-                "After collection, your schedule will sync back to your zone schedule.");
-        return result;
     }
 
     // ===========================
@@ -465,10 +426,19 @@ public class SchedulingService {
             Random random = new Random();
 
             for (ZoneHouseDetail house : houses) {
-                if (collectionDate.equals(house.getNextCollectedDate())) {
+                if (house.getOtp() == null || house.getOtp().trim().isEmpty()) {
                     String otp = String.format("%04d", random.nextInt(10000));
                     house.setOtp(otp);
+                    house.setNextCollectedDate(collectionDate);
                     zoneHouseDetailRepository.save(house);
+
+                    // Push notification to user
+                    String houseUserId = house.getRegisteredUserId();
+                    Notification notification = new Notification();
+                    notification.setUserId(houseUserId);
+                    notification.setTitle("Waste Collection OTP Generated");
+                    notification.setMessage("Waste collection for your zone " + zoneId + " is scheduled for " + collectionDate + ". Your OTP for verification is: " + otp + ". Please share this OTP with the collection crew.");
+                    notificationRepository.save(notification);
                 }
             }
         } finally {
@@ -499,6 +469,22 @@ public class SchedulingService {
 
             ZoneHouseDetail house = houseOpt.get();
 
+            boolean isImmediatePending = "immediate_pending".equalsIgnoreCase(house.getCollectionStatus());
+            // Verify date gate: check if current date is before the scheduled collection date
+            String scheduledDateStr = house.getNextCollectedDate();
+            if (scheduledDateStr != null && !scheduledDateStr.isEmpty()) {
+                try {
+                    LocalDate scheduledDate = LocalDate.parse(scheduledDateStr.trim(), DateTimeFormatter.ofPattern("dd-MM-yyyy"));
+                    if (LocalDate.now().isBefore(scheduledDate)) {
+                        result.put("status", "error");
+                        result.put("message", "Waste collection cannot be verified before the scheduled collection date (" + scheduledDateStr + ")");
+                        return result;
+                    }
+                } catch (Exception e) {
+                    // Ignore parsing error or fallback safely
+                }
+            }
+
             // Verify OTP
             if (house.getOtp() == null || !house.getOtp().equals(enteredOtp)) {
                 result.put("status", "error");
@@ -506,8 +492,7 @@ public class SchedulingService {
                 return result;
             }
 
-            // Keep track of whether it was a dedicated immediate collection request
-            boolean isImmediatePending = "immediate_pending".equalsIgnoreCase(house.getCollectionStatus());
+            // Keep track of whether it was a dedicated immediate collection request is already stored in isImmediatePending
 
             // If payment was pending and received at door
             if (paymentReceivedAtDoor && house.getAmountPending() > 0) {
@@ -516,11 +501,41 @@ public class SchedulingService {
                 if (payOpt.isPresent()) {
                     RegisteredUserPayment pay = payOpt.get();
                     pay.setAmountPending(0);
-                    addToPaymentHistory(pay, "Paid_at_collection");
-                    calculateAndAddPoints(pay, house.getAmountPending());
                     registeredUserPaymentRepository.save(pay);
                 }
+                addPointsToUser(houseUserId, house.getAmountPending(), "Paid_at_collection");
                 house.setAmountPending(0);
+
+                // Update worker's toPayAmount with the collection amount 50
+                String zoneId = house.getZoneId();
+                List<CollectionSchedule> schedules = collectionScheduleRepository.findByZoneId(zoneId);
+                String workerId = null;
+                String targetDate = house.getNextCollectedDate();
+                if (targetDate != null) {
+                    for (CollectionSchedule s : schedules) {
+                        if (targetDate.equals(s.getScheduledDate())) {
+                            workerId = s.getCollectionWorkerAssigned();
+                            break;
+                        }
+                    }
+                }
+                if (workerId == null) {
+                    for (CollectionSchedule s : schedules) {
+                        if ("scheduled".equalsIgnoreCase(s.getStatus()) || "in_progress".equalsIgnoreCase(s.getStatus())) {
+                            workerId = s.getCollectionWorkerAssigned();
+                            break;
+                        }
+                    }
+                }
+                if (workerId != null) {
+                    Optional<CollectionWorker> workerOpt = collectionWorkerRepository.findById(workerId);
+                    if (workerOpt.isPresent()) {
+                        CollectionWorker worker = workerOpt.get();
+                        double currentToPay = worker.getToPayAmount() != null ? worker.getToPayAmount() : 0.0;
+                        worker.setToPayAmount(currentToPay + 50.0);
+                        collectionWorkerRepository.save(worker);
+                    }
+                }
             }
 
             // Mark as collected
@@ -565,6 +580,17 @@ public class SchedulingService {
             }
 
             zoneHouseDetailRepository.save(house);
+
+            // Sync UserRequestedData status if there is an accepted or scheduled request
+            List<UserRequestedData> reqs = userRequestedDataRepository.findByUserId(houseUserId);
+            if (reqs != null) {
+                for (UserRequestedData req : reqs) {
+                    if ("accepted".equalsIgnoreCase(req.getStatus()) || "scheduled".equalsIgnoreCase(req.getStatus())) {
+                        req.setStatus("success");
+                        userRequestedDataRepository.save(req);
+                    }
+                }
+            }
 
             result.put("status", "success");
             result.put("message", "Waste collected successfully from house: " + houseUserId);
@@ -628,12 +654,25 @@ public class SchedulingService {
 
     private void updateZoneHousesForSchedule(String zoneId, String scheduledDate, double normalAmount, String requesterId, double requesterAmount) {
         List<ZoneHouseDetail> houses = zoneHouseDetailRepository.findByZoneId(zoneId);
+        Random random = new Random();
         for (ZoneHouseDetail house : houses) {
             house.setNextCollectedDate(scheduledDate);
             double amt = (requesterId != null && requesterId.equals(house.getRegisteredUserId())) ? requesterAmount : normalAmount;
             house.setAmountPending(amt);
             house.setCollectionStatus("pending");
+            
+            // Create a unique 4-digit OTP for each house
+            String otp = String.format("%04d", random.nextInt(10000));
+            house.setOtp(otp);
             zoneHouseDetailRepository.save(house);
+
+            // Send this OTP to the user's notification list
+            String houseUserId = house.getRegisteredUserId();
+            Notification notification = new Notification();
+            notification.setUserId(houseUserId);
+            notification.setTitle("Waste Collection OTP Generated");
+            notification.setMessage("Waste collection for your zone " + zoneId + " has been scheduled for " + scheduledDate + ". Your OTP for verification is: " + otp + ". Please share this OTP with the collection crew.");
+            notificationRepository.save(notification);
         }
 
         // Also update registered_user_collection and registered_user_payment
@@ -655,6 +694,10 @@ public class SchedulingService {
             double amt = (requesterId != null && requesterId.equals(uid)) ? requesterAmount : normalAmount;
             rup.setAmountPending(rup.getAmountPending() + amt);
             registeredUserPaymentRepository.save(rup);
+
+            // Synchronize pending payment in registered_users table
+            user.setPendingPayment(user.getPendingPayment() + amt);
+            registeredUserRepository.save(user);
         }
     }
 
@@ -744,10 +787,313 @@ public class SchedulingService {
         ruc.setLast10TimeWasteCollectedDate(history);
     }
 
-    private void calculateAndAddPoints(RegisteredUserPayment pay, double amountPaid) {
-        int pointsEarned = (int) (amountPaid / 5); // 10 points per ₹50
+    public void addPointsToUser(String userId, double amountPaid, String paymentDetail) {
+        int pointsEarned = (int) (amountPaid / 5);
+        if (pointsEarned <= 0) return;
+
+        // 1. Update RegisteredUser points
+        Optional<RegisteredUser> userOpt = registeredUserRepository.findById(userId);
+        if (userOpt.isPresent()) {
+            RegisteredUser user = userOpt.get();
+            user.setPoints(user.getPoints() + pointsEarned);
+            registeredUserRepository.save(user);
+        }
+
+        // 2. Update RegisteredUserPayment points and history
+        RegisteredUserPayment pay = registeredUserPaymentRepository.findById(userId)
+                .orElse(new RegisteredUserPayment(userId, 0.0, new ArrayList<>(), 0, 0));
         pay.setPointEarned(pay.getPointEarned() + pointsEarned);
         pay.setPendingPoint(pay.getPendingPoint() + pointsEarned);
+        
+        List<String> history = pay.getLast10TimesDetails();
+        if (history == null) {
+            history = new ArrayList<>();
+        }
+        history.add(0, paymentDetail);
+        if (history.size() > 10) {
+            history = new ArrayList<>(history.subList(0, 10));
+        }
+        pay.setLast10TimesDetails(history);
+        
+        registeredUserPaymentRepository.save(pay);
+    }
+
+    public Map<String, Object> assignOtpsToAllScheduledZones() {
+        ZoningService.zoningLock.readLock().lock();
+        try {
+            Map<String, Object> result = new HashMap<>();
+            List<CollectionSchedule> schedules = collectionScheduleRepository.findAll();
+            int otpCount = 0;
+            Random random = new Random();
+
+            for (CollectionSchedule schedule : schedules) {
+                if ("scheduled".equalsIgnoreCase(schedule.getStatus())) {
+                    String zoneId = schedule.getZoneId();
+                    String scheduledDate = schedule.getScheduledDate();
+
+                    List<ZoneHouseDetail> houses = zoneHouseDetailRepository.findByZoneId(zoneId);
+                    for (ZoneHouseDetail house : houses) {
+                        // Check if house has no OTP
+                        if (house.getOtp() == null || house.getOtp().trim().isEmpty()) {
+                            String otp = String.format("%04d", random.nextInt(10000));
+                            house.setOtp(otp);
+                            house.setNextCollectedDate(scheduledDate);
+                            zoneHouseDetailRepository.save(house);
+
+                            // Push notification
+                            String houseUserId = house.getRegisteredUserId();
+                            Notification notification = new Notification();
+                            notification.setUserId(houseUserId);
+                            notification.setTitle("Waste Collection OTP Generated");
+                            notification.setMessage("Waste collection for your zone " + zoneId + " is scheduled for " + scheduledDate + ". Your OTP for verification is: " + otp + ". Please share this OTP with the collection crew.");
+                            notificationRepository.save(notification);
+
+                            otpCount++;
+                        }
+                    }
+                }
+            }
+
+            result.put("status", "success");
+            result.put("message", "Successfully generated OTPs for " + otpCount + " households without existing OTPs.");
+            return result;
+        } finally {
+            ZoningService.zoningLock.readLock().unlock();
+        }
+    }
+
+    public Map<String, Object> skipHouse(String houseUserId, String reason) {
+        ZoningService.zoningLock.readLock().lock();
+        try {
+            Map<String, Object> result = new HashMap<>();
+            Optional<ZoneHouseDetail> houseOpt = zoneHouseDetailRepository.findById(houseUserId);
+            if (!houseOpt.isPresent()) {
+                result.put("status", "error");
+                result.put("message", "House not found");
+                return result;
+            }
+
+            ZoneHouseDetail house = houseOpt.get();
+            // Check payment status: paid if amountPending <= 0
+            if (house.getAmountPending() > 0) {
+                // If not paid, set status to skipped but do not reschedule for tomorrow
+                house.setCollectionStatus("skipped");
+                zoneHouseDetailRepository.save(house);
+                result.put("status", "success");
+                result.put("message", "House skipped. Since payment status is pending, it was not rescheduled for tomorrow.");
+                return result;
+            }
+
+            // If paid:
+            String tomorrowStr = LocalDate.now().plusDays(1).format(DateTimeFormatter.ofPattern("dd-MM-yyyy"));
+            
+            // 1. Update house details
+            house.setNextCollectedDate(tomorrowStr);
+            house.setCollectionStatus("pending");
+            
+            // Generate OTP
+            Random random = new Random();
+            String otp = String.format("%04d", random.nextInt(10000));
+            house.setOtp(otp);
+            zoneHouseDetailRepository.save(house);
+
+            // 2. Find or create schedule for tomorrow
+            String zoneId = house.getZoneId();
+            List<CollectionSchedule> existingTomorrowSchedules = collectionScheduleRepository.findByZoneId(zoneId);
+            CollectionSchedule tomorrowSchedule = null;
+            for (CollectionSchedule cs : existingTomorrowSchedules) {
+                if (tomorrowStr.equals(cs.getScheduledDate())) {
+                    tomorrowSchedule = cs;
+                    break;
+                }
+            }
+
+            String assignedWorkerId = null;
+            String assignedWorkerName = "Worker";
+
+            if (tomorrowSchedule != null) {
+                assignedWorkerId = tomorrowSchedule.getCollectionWorkerAssigned();
+                Optional<CollectionWorker> cwOpt = collectionWorkerRepository.findById(assignedWorkerId);
+                if (cwOpt.isPresent()) {
+                    assignedWorkerName = cwOpt.get().getName();
+                }
+            } else {
+                // We need to find a free worker or randomly assign one
+                List<CollectionWorker> workers = collectionWorkerRepository.findByRole("WORKER");
+                // Find a free worker
+                for (CollectionWorker worker : workers) {
+                    String wId = worker.getCollectionWorkerId();
+                    if (isWorkerAvailableForDate(wId, tomorrowStr)) {
+                        assignedWorkerId = wId;
+                        assignedWorkerName = worker.getName();
+                        break;
+                    }
+                }
+
+                // If no worker is free, randomly assign one
+                if (assignedWorkerId == null && !workers.isEmpty()) {
+                    CollectionWorker randomWorker = workers.get(random.nextInt(workers.size()));
+                    assignedWorkerId = randomWorker.getCollectionWorkerId();
+                    assignedWorkerName = randomWorker.getName();
+                }
+
+                if (assignedWorkerId != null) {
+                    // Create a tomorrow schedule for this zone
+                    tomorrowSchedule = new CollectionSchedule();
+                    String scheduleId = "SCH-" + zoneId + "-" + UUID.randomUUID().toString().substring(0, 6);
+                    tomorrowSchedule.setScheduleId(scheduleId);
+                    tomorrowSchedule.setZoneId(zoneId);
+                    tomorrowSchedule.setScheduledDate(tomorrowStr);
+                    tomorrowSchedule.setCollectionWorkerAssigned(assignedWorkerId);
+                    tomorrowSchedule.setStatus("scheduled");
+                    
+                    // Copy localBodyName and district from any existing schedule of this zone
+                    if (!existingTomorrowSchedules.isEmpty()) {
+                        CollectionSchedule template = existingTomorrowSchedules.get(0);
+                        tomorrowSchedule.setLocalBodyName(template.getLocalBodyName());
+                        tomorrowSchedule.setDistrict(template.getDistrict());
+                    } else {
+                        // Fallback to worker body/district
+                        Optional<CollectionWorker> cwOpt = collectionWorkerRepository.findById(assignedWorkerId);
+                        if (cwOpt.isPresent()) {
+                            tomorrowSchedule.setLocalBodyName(cwOpt.get().getLocalBodyName());
+                            tomorrowSchedule.setDistrict(cwOpt.get().getDistrict());
+                        }
+                    }
+                    collectionScheduleRepository.save(tomorrowSchedule);
+
+                    // Update worker schedule record
+                    updateWorkerScheduleRecordForDate(assignedWorkerId, assignedWorkerName, zoneId, tomorrowStr);
+                }
+            }
+
+            // Also update RegisteredUserCollection if it exists
+            Optional<RegisteredUserCollection> rucOpt = registeredUserCollectionRepository.findById(houseUserId);
+            if (rucOpt.isPresent()) {
+                RegisteredUserCollection ruc = rucOpt.get();
+                ruc.setNextScheduledDate(tomorrowStr);
+                ruc.setLastCollectionStatus("pending");
+                registeredUserCollectionRepository.save(ruc);
+            }
+
+            // 3. Notify the resident user
+            Notification notification = new Notification();
+            notification.setUserId(houseUserId);
+            notification.setTitle("Waste Collection Rescheduled (Skipped)");
+            notification.setMessage("Your waste collection was skipped today but has been rescheduled for tomorrow (" + tomorrowStr + "). Your OTP is: " + otp + ". Assigned worker: " + assignedWorkerName + ".");
+            notificationRepository.save(notification);
+
+            result.put("status", "success");
+            result.put("message", "House was skipped. Rescheduled for tomorrow (" + tomorrowStr + ") with worker " + assignedWorkerName + ".");
+            return result;
+
+        } finally {
+            ZoningService.zoningLock.readLock().unlock();
+        }
+    }
+
+    private boolean isWorkerAvailableForDate(String workerId, String date) {
+        List<CollectionSchedule> assignments = collectionScheduleRepository.findByCollectionWorkerAssignedAndScheduledDate(workerId, date);
+        if (!assignments.isEmpty()) {
+            return false;
+        }
+
+        List<LeaveRequest> leaves = leaveRequestRepository.findByCollectionWorkerId(workerId);
+        boolean onLeave = leaves.stream()
+                .anyMatch(l -> "approved".equalsIgnoreCase(l.getStatus())
+                        && date.equals(l.getLeaveRequestedDate()));
+        if (onLeave) {
+            return false;
+        }
+
+        List<UserRequestedData> reqAssignments = userRequestedDataRepository.findByWorkerIdAndNextScheduledDate(workerId, date);
+        if (reqAssignments != null && !reqAssignments.isEmpty()) {
+            boolean hasAcceptedReq = reqAssignments.stream().anyMatch(r -> 
+                "accepted".equalsIgnoreCase(r.getStatus()) || "scheduled".equalsIgnoreCase(r.getStatus())
+            );
+            if (hasAcceptedReq) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void updateWorkerScheduleRecordForDate(String workerId, String workerName, String zoneId, String date) {
+        CollectionWorkerSchedule cws = collectionWorkerScheduleRepository.findById(workerId)
+                .orElse(new CollectionWorkerSchedule());
+        cws.setCollectionWorkerId(workerId);
+        cws.setName(workerName);
+        cws.setAssignedZoneId(zoneId);
+        cws.setNumberOfAssignedDates(cws.getNumberOfAssignedDates() + 1);
+        if (cws.getAssignedDates() == null) {
+            cws.setAssignedDates(new ArrayList<>());
+        }
+        if (!cws.getAssignedDates().contains(date)) {
+            cws.getAssignedDates().add(date);
+        }
+        collectionWorkerScheduleRepository.save(cws);
+    }
+
+    public void closeOverduePendingHouses() {
+        ZoningService.zoningLock.readLock().lock();
+        try {
+            List<LastTimeCollection> lastTimeCollections = lastTimeCollectionRepository.findAll();
+            LocalDate today = LocalDate.now();
+
+            for (LastTimeCollection ltc : lastTimeCollections) {
+                String zoneId = ltc.getZoneId();
+                if (ltc.getLastCollectedDate() == null || ltc.getLastCollectedDate().trim().isEmpty()) {
+                    continue;
+                }
+
+                LocalDate lastCollectedDate = parseLastCollectedDate(ltc.getLastCollectedDate());
+                long daysSince = ChronoUnit.DAYS.between(lastCollectedDate, today);
+
+                // If more than 2 days have passed since the last collection
+                if (daysSince > 2) {
+                    List<ZoneHouseDetail> houses = zoneHouseDetailRepository.findByZoneId(zoneId);
+                    
+                    // Fetch the zone's next scheduled date (if any)
+                    List<CollectionSchedule> schedules = collectionScheduleRepository.findByZoneId(zoneId);
+                    String zoneScheduledDate = null;
+                    for (CollectionSchedule s : schedules) {
+                        if ("scheduled".equalsIgnoreCase(s.getStatus())) {
+                            zoneScheduledDate = s.getScheduledDate();
+                            break;
+                        }
+                    }
+
+                    for (ZoneHouseDetail house : houses) {
+                        String status = house.getCollectionStatus();
+                        if (status != null && ("pending".equalsIgnoreCase(status) || "immediate_pending".equalsIgnoreCase(status))) {
+                            house.setCollectionStatus("closed");
+                            if (zoneScheduledDate != null) {
+                                house.setNextCollectedDate(zoneScheduledDate);
+                            } else {
+                                house.setNextCollectedDate("Pending assignment");
+                            }
+                            house.setOtp(null);
+                            zoneHouseDetailRepository.save(house);
+
+                            // Also update RegisteredUserCollection if it exists
+                            Optional<RegisteredUserCollection> rucOpt = registeredUserCollectionRepository.findById(house.getRegisteredUserId());
+                            if (rucOpt.isPresent()) {
+                                RegisteredUserCollection ruc = rucOpt.get();
+                                ruc.setLastCollectionStatus("closed");
+                                if (zoneScheduledDate != null) {
+                                    ruc.setNextScheduledDate(zoneScheduledDate);
+                                } else {
+                                    ruc.setNextScheduledDate("Pending assignment");
+                                }
+                                registeredUserCollectionRepository.save(ruc);
+                            }
+                        }
+                    }
+                }
+            }
+        } finally {
+            ZoningService.zoningLock.readLock().unlock();
+        }
     }
 
     private LocalDate parseLastCollectedDate(String dateStr) {
